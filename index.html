@@ -399,73 +399,6 @@
   .submit-btn:hover { border-color: var(--gold-bright); box-shadow: 0 0 20px rgba(212,168,67,0.15); }
   .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* SETTINGS */
-  .settings-card {
-    background: var(--void-mid);
-    border: 1px solid rgba(212,168,67,0.15);
-    padding: 32px;
-    margin-bottom: 16px;
-  }
-
-  .settings-card h3 {
-    font-family: 'Cinzel', serif;
-    font-size: 0.75rem;
-    letter-spacing: 0.3em;
-    color: var(--sand-dark);
-    margin-bottom: 20px;
-  }
-
-  .settings-field label {
-    display: block;
-    font-family: 'Cinzel', serif;
-    font-size: 0.62rem;
-    letter-spacing: 0.2em;
-    color: var(--text-dim);
-    margin-bottom: 8px;
-  }
-
-  .settings-field input {
-    width: 100%;
-    background: var(--void);
-    border: 1px solid rgba(212,168,67,0.2);
-    color: var(--text);
-    padding: 10px 14px;
-    font-family: 'Crimson Pro', serif;
-    font-size: 0.9rem;
-    outline: none;
-    margin-bottom: 16px;
-    transition: border-color 0.2s;
-  }
-
-  .settings-field input:focus { border-color: rgba(212,168,67,0.5); }
-
-  .save-btn {
-    padding: 10px 28px;
-    background: none;
-    border: 1px solid rgba(212,168,67,0.4);
-    color: var(--gold);
-    font-family: 'Cinzel', serif;
-    font-size: 0.65rem;
-    letter-spacing: 0.2em;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .save-btn:hover { background: rgba(212,168,67,0.08); border-color: var(--gold); }
-
-  .info-box {
-    background: rgba(196,80,10,0.08);
-    border: 1px solid rgba(196,80,10,0.25);
-    padding: 16px 20px;
-    font-size: 0.85rem;
-    color: var(--text-dim);
-    line-height: 1.7;
-    font-style: italic;
-  }
-
-  .info-box strong { color: var(--spice-bright); font-style: normal; }
-  .info-box a { color: var(--sand-dark); }
-
   /* STATUS */
   .status-bar {
     position: fixed;
@@ -524,7 +457,6 @@
     <button class="tab active" onclick="showTab('board')">RANKINGS</button>
     <button class="tab" onclick="showTab('history')">HISTORY</button>
     <button class="tab" onclick="showTab('add')">ADD GAME</button>
-    <button class="tab" onclick="showTab('settings')">SETTINGS</button>
   </div>
 
   <!-- LEADERBOARD -->
@@ -561,27 +493,6 @@
     </div>
   </div>
 
-  <!-- SETTINGS -->
-  <div class="section" id="tab-settings">
-    <div class="settings-card">
-      <h3>SUPABASE CONFIGURATION</h3>
-      <div class="settings-field">
-        <label>SUPABASE URL</label>
-        <input type="text" id="cfg-url" placeholder="https://your-project.supabase.co">
-        <label>SUPABASE ANON KEY</label>
-        <input type="text" id="cfg-key" placeholder="eyJhbGciOi...">
-        <button class="save-btn" onclick="saveConfig()">SAVE CONFIGURATION</button>
-      </div>
-    </div>
-    <div class="info-box">
-      <strong>설정 방법</strong><br>
-      1. Supabase에서 <strong>dune_games</strong> 테이블 생성 (id, date, results, created_at)<br>
-      2. anon role에 대해 <strong>SELECT / INSERT</strong> 정책 허용<br>
-      3. URL + anon key 입력 후 Save<br>
-      4. 이후 모든 방문자가 기록 조회/추가 가능<br><br>
-      <strong>주의:</strong> anon key는 공개 가능한 키이며, 정책(RLS)으로 권한을 제한해야 합니다.
-    </div>
-  </div>
 </div>
 
 <div class="status-bar" id="status"></div>
@@ -589,13 +500,11 @@
 <script>
 const PLAYERS = ['동규', '경태', '철승', '형석'];
 const RANK_POINTS = [3, 1, -1, -3];
-const SUPABASE_URL = ''; // e.g. https://xxxx.supabase.co
-const SUPABASE_ANON_KEY = ''; // public anon key
+const SUPABASE_URL = 'https://pjfoydrqnozzwhwxifuz.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_P5A4gqAJ6LF3Ams62vhCmA_3kFdMo4s';
 
 let state = {
-  games: [],
-  supabaseUrl: SUPABASE_URL,
-  supabaseAnonKey: SUPABASE_ANON_KEY
+  games: []
 };
 
 let currentPeriod = 'all';
@@ -605,39 +514,21 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Set today's date
   document.getElementById('game-date').value = new Date().toISOString().split('T')[0];
   buildPlayerForm();
-  loadConfig();
   await loadData();
   render();
 });
 
-// ---------- CONFIG ----------
-function loadConfig() {
-  state.supabaseUrl = localStorage.getItem('dune_supabase_url') || SUPABASE_URL;
-  state.supabaseAnonKey = localStorage.getItem('dune_supabase_anon_key') || SUPABASE_ANON_KEY;
-  document.getElementById('cfg-url').value = state.supabaseUrl;
-  document.getElementById('cfg-key').value = state.supabaseAnonKey;
-}
-
-function saveConfig() {
-  state.supabaseUrl = document.getElementById('cfg-url').value.trim();
-  state.supabaseAnonKey = document.getElementById('cfg-key').value.trim();
-  localStorage.setItem('dune_supabase_url', state.supabaseUrl);
-  localStorage.setItem('dune_supabase_anon_key', state.supabaseAnonKey);
-  showStatus('Configuration saved');
-  loadData().then(render);
-}
-
 // ---------- SUPABASE API ----------
 async function loadData() {
-  if (!state.supabaseUrl || !state.supabaseAnonKey) return;
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
   try {
-    const res = await fetch(`${state.supabaseUrl}/rest/v1/dune_games?select=id,date,results&order=date.desc,id.desc`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/dune_games?select=id,date,results&order=date.desc,id.desc`, {
       headers: {
-        apikey: state.supabaseAnonKey,
-        Authorization: `Bearer ${state.supabaseAnonKey}`
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`
       }
     });
-    if (!res.ok) { showStatus('Failed to load data — check Supabase settings', true); return; }
+    if (!res.ok) { showStatus('Failed to load data from Supabase', true); return; }
     const rows = await res.json();
     state.games = rows.map(row => ({
       id: row.id,
@@ -650,16 +541,16 @@ async function loadData() {
 }
 
 async function insertGame(game) {
-  if (!state.supabaseUrl || !state.supabaseAnonKey) {
-    showStatus('Supabase 설정이 필요합니다 (Settings 탭)', true);
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    showStatus('Supabase constants are missing', true);
     return false;
   }
   try {
-    const res = await fetch(`${state.supabaseUrl}/rest/v1/dune_games`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/dune_games`, {
       method: 'POST',
       headers: {
-        apikey: state.supabaseAnonKey,
-        Authorization: `Bearer ${state.supabaseAnonKey}`,
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
         'Content-Type': 'application/json',
         Prefer: 'return=representation'
       },
@@ -824,7 +715,7 @@ function showTab(name) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById(`tab-${name}`).classList.add('active');
-  const idx = ['board','history','add','settings'].indexOf(name);
+  const idx = ['board','history','add'].indexOf(name);
   document.querySelectorAll('.tab')[idx].classList.add('active');
 }
 
