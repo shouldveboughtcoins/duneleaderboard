@@ -589,11 +589,16 @@
 <script>
 const PLAYERS = ['동규', '경태', '철승', '형석'];
 const RANK_POINTS = [3, 1, -1, -3];
+const PUBLIC_GIST_ID = ''; // Set this to your public leaderboard gist ID before publishing.
 
 let state = {
   games: [],
+  publicStandings: [],
+  publicUpdatedAt: '',
   token: '',
-  gistId: ''
+  privateGistId: '',
+  publicGistId: PUBLIC_GIST_ID,
+  isOwner: false
 };
 
 let currentPeriod = 'all';
@@ -605,32 +610,59 @@ window.addEventListener('DOMContentLoaded', async () => {
   buildPlayerForm();
   loadConfig();
   await loadData();
+  configureOwnerUI();
   render();
 });
 
 // ---------- CONFIG ----------
 function loadConfig() {
+  const urlGistId = new URLSearchParams(window.location.search).get('public');
   state.token = localStorage.getItem('dune_token') || '';
-  state.gistId = localStorage.getItem('dune_gist_id') || '';
+  state.privateGistId = localStorage.getItem('dune_private_gist_id') || '';
+  state.publicGistId = urlGistId || localStorage.getItem('dune_public_gist_id') || PUBLIC_GIST_ID;
+  state.isOwner = !!state.token;
   document.getElementById('cfg-token').value = state.token;
-  document.getElementById('cfg-gist').value = state.gistId;
+  document.getElementById('cfg-gist').value = state.privateGistId;
 }
 
 function saveConfig() {
   state.token = document.getElementById('cfg-token').value.trim();
-  state.gistId = document.getElementById('cfg-gist').value.trim();
+  state.privateGistId = document.getElementById('cfg-gist').value.trim();
+  state.isOwner = !!state.token;
   localStorage.setItem('dune_token', state.token);
-  localStorage.setItem('dune_gist_id', state.gistId);
+  localStorage.setItem('dune_private_gist_id', state.privateGistId);
+  if (state.publicGistId) localStorage.setItem('dune_public_gist_id', state.publicGistId);
   showStatus('Configuration saved');
+  configureOwnerUI();
   loadData().then(render);
 }
 
 // ---------- GIST API ----------
 async function loadData() {
-  if (!state.token) return;
-  if (!state.gistId) return;
+  await loadPublicData();
+  if (!state.isOwner || !state.token || !state.privateGistId) return;
+  await loadPrivateData();
+}
+
+async function loadPublicData() {
+  if (!state.publicGistId) return;
   try {
-    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+    const res = await fetch(`https://api.github.com/gists/${state.publicGistId}`);
+    if (!res.ok) return;
+    const gist = await res.json();
+    const content = gist.files['dune_leaderboard.json']?.content;
+    if (!content) return;
+    const parsed = JSON.parse(content);
+    state.publicStandings = parsed.standings || [];
+    state.publicUpdatedAt = parsed.updatedAt || '';
+  } catch (e) {
+    // Ignore public fetch errors for anonymous visitors.
+  }
+}
+
+async function loadPrivateData() {
+  try {
+    const res = await fetch(`https://api.github.com/gists/${state.privateGistId}`, {
       headers: { Authorization: `token ${state.token}`, Accept: 'application/vnd.github.v3+json' }
     });
     if (!res.ok) { showStatus('Failed to load data — check settings', true); return; }
@@ -642,15 +674,15 @@ async function loadData() {
   }
 }
 
-async function saveData() {
+async function savePrivateData() {
   if (!state.token) { showStatus('Token not set — go to Settings', true); return false; }
 
   const content = JSON.stringify(state.games, null, 2);
   const body = { files: { 'dune_scores.json': { content } } };
 
-  if (!state.gistId) {
+  if (!state.privateGistId) {
     // Create new gist
-    body.description = 'Dune Board Game Leaderboard';
+    body.description = 'Dune Board Game History (Private)';
     body.public = false;
     const res = await fetch('https://api.github.com/gists', {
       method: 'POST',
@@ -659,16 +691,55 @@ async function saveData() {
     });
     if (!res.ok) { showStatus('Failed to create Gist', true); return false; }
     const gist = await res.json();
-    state.gistId = gist.id;
-    localStorage.setItem('dune_gist_id', state.gistId);
-    document.getElementById('cfg-gist').value = state.gistId;
+    state.privateGistId = gist.id;
+    localStorage.setItem('dune_private_gist_id', state.privateGistId);
+    document.getElementById('cfg-gist').value = state.privateGistId;
   } else {
-    const res = await fetch(`https://api.github.com/gists/${state.gistId}`, {
+    const res = await fetch(`https://api.github.com/gists/${state.privateGistId}`, {
       method: 'PATCH',
       headers: { Authorization: `token ${state.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
     if (!res.ok) { showStatus('Failed to save data', true); return false; }
+  }
+  return true;
+}
+
+async function savePublicLeaderboard() {
+  if (!state.token) return false;
+  const standings = calcStandings(state.games);
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    standings: standings.map(s => ({
+      player: s.player,
+      totalPoints: s.totalPoints,
+      totalScore: s.totalScore,
+      wins: s.wins,
+      games: s.games
+    }))
+  };
+  const body = {
+    description: 'Dune Leaderboard (Public)',
+    public: true,
+    files: {
+      'dune_leaderboard.json': { content: JSON.stringify(payload, null, 2) }
+    }
+  };
+
+  const method = state.publicGistId ? 'PATCH' : 'POST';
+  const url = state.publicGistId ? `https://api.github.com/gists/${state.publicGistId}` : 'https://api.github.com/gists';
+
+  const res = await fetch(url, {
+    method,
+    headers: { Authorization: `token ${state.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) { showStatus('Failed to sync public leaderboard', true); return false; }
+  if (!state.publicGistId) {
+    const gist = await res.json();
+    state.publicGistId = gist.id;
+    localStorage.setItem('dune_public_gist_id', state.publicGistId);
+    showStatus(`Public leaderboard gist created: ${state.publicGistId}`);
   }
   return true;
 }
@@ -714,12 +785,14 @@ async function submitGame() {
   btn.disabled = true;
   btn.textContent = 'SAVING…';
 
-  const ok = await saveData();
+  const okPrivate = await savePrivateData();
+  const okPublic = okPrivate ? await savePublicLeaderboard() : false;
   btn.disabled = false;
   btn.textContent = 'INSCRIBE UNTO THE RECORD';
 
-  if (ok) {
+  if (okPrivate && okPublic) {
     showStatus('Game recorded successfully');
+    state.publicStandings = calcStandings(state.games);
     render();
     showTab('board');
     // reset form
@@ -752,11 +825,11 @@ function calcStandings(games) {
 
 // ---------- RENDER ----------
 function render() {
-  const games = filteredGames();
-  const standings = calcStandings(games);
+  const games = state.isOwner ? filteredGames() : [];
+  const standings = state.isOwner ? calcStandings(games) : state.publicStandings;
   renderRanks(standings);
-  renderRecentGames(state.games.slice(0, 5), 'recent-games');
-  renderAllGames();
+  renderRecentGames(state.isOwner ? state.games.slice(0, 5) : [], 'recent-games');
+  if (state.isOwner) renderAllGames();
 }
 
 function renderRanks(standings) {
@@ -773,7 +846,12 @@ function renderRanks(standings) {
 
 function renderRecentGames(games, containerId) {
   const el = document.getElementById(containerId);
-  if (!games.length) { el.innerHTML = '<div class="empty-state">기록된 게임이 없습니다</div>'; return; }
+  if (!games.length) {
+    el.innerHTML = state.isOwner
+      ? '<div class="empty-state">기록된 게임이 없습니다</div>'
+      : '<div class="empty-state">공개 모드에서는 게임 히스토리를 표시하지 않습니다</div>';
+    return;
+  }
   el.innerHTML = games.map(g => gameRow(g, false)).join('');
 }
 
@@ -809,7 +887,9 @@ function formatDate(d) {
 async function deleteGame(id) {
   if (!confirm('이 기록을 삭제할까요?')) return;
   state.games = state.games.filter(g => g.id !== id);
-  const ok = await saveData();
+  const okPrivate = await savePrivateData();
+  const okPublic = okPrivate ? await savePublicLeaderboard() : false;
+  const ok = okPrivate && okPublic;
   if (ok) { showStatus('Game deleted'); render(); }
 }
 
@@ -821,11 +901,19 @@ function setPeriod(p, btn) {
 }
 
 function showTab(name) {
+  if (!state.isOwner && ['history', 'add'].includes(name)) return;
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById(`tab-${name}`).classList.add('active');
   const idx = ['board','history','add','settings'].indexOf(name);
   document.querySelectorAll('.tab')[idx].classList.add('active');
+}
+
+function configureOwnerUI() {
+  const tabs = document.querySelectorAll('.tab');
+  tabs[1].style.display = state.isOwner ? '' : 'none';
+  tabs[2].style.display = state.isOwner ? '' : 'none';
+  if (!state.isOwner) showTab('board');
 }
 
 // ---------- STATUS ----------
