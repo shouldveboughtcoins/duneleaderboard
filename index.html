@@ -428,6 +428,41 @@
     font-size: 1rem;
   }
 
+  .chart-card {
+    background: var(--void-mid);
+    border: 1px solid rgba(212,168,67,0.12);
+    padding: 14px 16px 10px;
+    margin-bottom: 36px;
+  }
+
+  .chart-legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  .chart-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .chart-svg {
+    width: 100%;
+    height: 240px;
+    display: block;
+  }
+
   /* Score badge */
   .score-delta {
     font-family: 'Cinzel', serif;
@@ -468,6 +503,8 @@
       <button class="period-btn" onclick="setPeriod('year', this)">THIS YEAR</button>
     </div>
     <div class="rank-cards" id="rank-cards"></div>
+    <div class="section-label">PTS TREND</div>
+    <div id="pts-chart"></div>
     <div class="section-label">RECENT GAMES</div>
     <div id="recent-games"></div>
   </div>
@@ -572,6 +609,27 @@ async function insertGame(game) {
   }
 }
 
+async function deleteGameFromSupabase(id) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return false;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/dune_games?id=eq.${id}`, {
+      method: 'DELETE',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`
+      }
+    });
+    if (!res.ok) {
+      showStatus('Failed to delete game from Supabase', true);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    showStatus('Network error deleting game', true);
+    return false;
+  }
+}
+
 // ---------- FORM ----------
 function buildPlayerForm() {
   const grid = document.getElementById('player-form');
@@ -654,6 +712,7 @@ function render() {
   const games = filteredGames();
   const standings = calcStandings(games);
   renderRanks(standings);
+  renderPtsTrend(games);
   renderRecentGames(state.games.slice(0, 5), 'recent-games');
   renderAllGames();
 }
@@ -679,7 +738,7 @@ function renderRecentGames(games, containerId) {
 function renderAllGames() {
   const el = document.getElementById('all-games');
   if (!state.games.length) { el.innerHTML = '<div class="empty-state">기록된 게임이 없습니다</div>'; return; }
-  el.innerHTML = state.games.map(g => gameRow(g, false)).join('');
+  el.innerHTML = state.games.map(g => gameRow(g, true)).join('');
 }
 
 function gameRow(g, deletable) {
@@ -689,7 +748,9 @@ function gameRow(g, deletable) {
     return `<span class="player-chip"><span class="chip-rank">${r.rank}.</span>${r.player} ${r.score}점 <span class="score-delta ${r.points > 0 ? 'pos' : 'neg'}">${sign}${r.points}</span></span>`;
   }).join('');
 
-  const delBtn = deletable ? '<div></div>' : '<div></div>';
+  const delBtn = deletable
+    ? `<button class="game-delete" onclick="deleteGame(${g.id})" title="삭제">✕</button>`
+    : '<div></div>';
 
   return `
     <div class="game-row">
@@ -702,6 +763,96 @@ function gameRow(g, deletable) {
 function formatDate(d) {
   const [y, m, day] = d.split('-');
   return `${y}.${m}.${day}`;
+}
+
+function renderPtsTrend(games) {
+  const el = document.getElementById('pts-chart');
+  if (!games.length) {
+    el.innerHTML = '<div class="chart-card"><div class="empty-state">표시할 데이터가 없습니다</div></div>';
+    return;
+  }
+
+  const palette = ['#f0c84a', '#7dce82', '#77b7ff', '#e8721c'];
+  const sortedGames = [...games].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id);
+  const totals = Object.fromEntries(PLAYERS.map(p => [p, 0]));
+  const series = Object.fromEntries(PLAYERS.map(p => [p, []]));
+
+  sortedGames.forEach((g, i) => {
+    for (const p of PLAYERS) {
+      const result = g.results.find(r => r.player === p);
+      if (result) totals[p] += result.points;
+      series[p].push({ x: i, y: totals[p] });
+    }
+  });
+
+  const allY = PLAYERS.flatMap(p => series[p].map(pt => pt.y));
+  let minY = Math.min(...allY);
+  let maxY = Math.max(...allY);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+
+  const width = 760;
+  const height = 240;
+  const pad = { top: 16, right: 14, bottom: 26, left: 36 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  const xScale = x => (sortedGames.length === 1 ? pad.left + plotW / 2 : pad.left + (x / (sortedGames.length - 1)) * plotW);
+  const yScale = y => pad.top + (maxY - y) / (maxY - minY) * plotH;
+
+  const yTicks = 4;
+  const grid = Array.from({ length: yTicks + 1 }, (_, i) => {
+    const value = minY + ((maxY - minY) * i / yTicks);
+    const y = yScale(value);
+    return `
+      <line x1="${pad.left}" y1="${y}" x2="${pad.left + plotW}" y2="${y}" stroke="rgba(212,168,67,0.12)" stroke-width="1" />
+      <text x="${pad.left - 6}" y="${y + 4}" text-anchor="end" fill="#9a8060" font-size="10">${Math.round(value)}</text>
+    `;
+  }).join('');
+
+  const lines = PLAYERS.map((p, idx) => {
+    const points = series[p].map(pt => `${xScale(pt.x)},${yScale(pt.y)}`).join(' ');
+    const last = series[p][series[p].length - 1];
+    return `
+      <polyline fill="none" stroke="${palette[idx % palette.length]}" stroke-width="2.2" points="${points}" />
+      <circle cx="${xScale(last.x)}" cy="${yScale(last.y)}" r="3" fill="${palette[idx % palette.length]}" />
+    `;
+  }).join('');
+
+  const startDate = formatDate(sortedGames[0].date);
+  const endDate = formatDate(sortedGames[sortedGames.length - 1].date);
+  const xLabels = `
+    <text x="${pad.left}" y="${height - 8}" text-anchor="start" fill="#9a8060" font-size="10">${startDate}</text>
+    <text x="${pad.left + plotW}" y="${height - 8}" text-anchor="end" fill="#9a8060" font-size="10">${endDate}</text>
+  `;
+
+  const legend = PLAYERS.map((p, idx) => `
+    <span class="chart-legend-item">
+      <span class="legend-dot" style="background:${palette[idx % palette.length]}"></span>
+      ${p}
+    </span>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-legend">${legend}</div>
+      <svg class="chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="누적 pts 변화 그래프">
+        ${grid}
+        <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${pad.top + plotH}" stroke="rgba(212,168,67,0.2)" />
+        <line x1="${pad.left}" y1="${pad.top + plotH}" x2="${pad.left + plotW}" y2="${pad.top + plotH}" stroke="rgba(212,168,67,0.2)" />
+        ${lines}
+        ${xLabels}
+      </svg>
+    </div>
+  `;
+}
+
+async function deleteGame(id) {
+  if (!confirm('이 게임 기록을 삭제할까요?')) return;
+  const ok = await deleteGameFromSupabase(id);
+  if (!ok) return;
+  state.games = state.games.filter(g => g.id !== id);
+  showStatus('Game deleted');
+  render();
 }
 
 function setPeriod(p, btn) {
